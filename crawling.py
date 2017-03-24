@@ -4,12 +4,14 @@ import re
 import urlparse
 import csv
 import sys
+import socket
 import threading
 SLEEP_TIME = 1
 
 
 # download the html with specific retry nums and user_agent
-def download(url, num_retry=2, user_agent='zhuangh7'):
+def download(url, num_retry=2, user_agent='zhuangh7',timeout = 10):
+    socket.setdefaulttimeout(timeout)
     print 'download :', url
     header = {'User-agent': user_agent}
     request = urllib2.Request(url, headers=header)  # create a header with user_agent
@@ -80,23 +82,45 @@ class callback_1:
 
 # crawl_queue [] : the major queue for url and add the seed_url to the list
 # seen {} : to save which url is saved and its depth
-def link_sitemap(seed_url, num_retry=2, user_agent='zhuangh7', link_regex='(.*)', max_depth=2, scrape_callback=None):
+def link_sitemap(seed_url, num_retry=2, user_agent='zhuangh7', link_regex='(.*)', max_depth=2, scrape_callback=None,max_threads = 10):
     crawl_queue = [seed_url]
     seen = {seed_url: 0}
-    while crawl_queue: # for the url in de main queue
-        url = crawl_queue.pop()
-        html = download(url, num_retry, user_agent) # download it
-        if html: # if download success
-            if scrape_callback:
-                scrape_callback(html, url) # call back
-            depth = seen[url] # get the depth of the url
-            if depth != max_depth:
-                for link in get_links(html):  # find all the links in the html of the url
-                    if re.match(link_regex, link):  # if we need the link then add it to the major queue
-                        link = urlparse.urljoin(seed_url, link)
-                        if link not in seen:
-                            seen[link] = depth + 1 # set the depth
-                            crawl_queue.append(link)  # be avid to cramp the same sit
+
+    def process_queue():
+        while True:
+            try:
+                url = crawl_queue.pop()
+            except IndexError:
+                # the queue is empty
+                break
+            else:
+                html = download(url, num_retry, user_agent)  # download it
+                if html:  # if download success
+                    if scrape_callback:
+                        scrape_callback(html, url)  # call back
+                    depth = seen[url]  # get the depth of the url
+                    if depth != max_depth:
+                        for link in get_links(html):  # find all the links in the html of the url
+                            if re.match(link_regex, link):  # if we need the link then add it to the major queue
+                                link = urlparse.urljoin(seed_url, link)
+                                if link not in seen:
+                                    seen[link] = depth + 1  # set the depth
+                                    crawl_queue.append(link)  # be avid to cramp the same sit
+
+    threads = []
+    while threads or crawl_queue:
+        for thread in threads:
+            if not thread.is_alive():
+                # delete stoped thread
+                threads.remove(thread)
+        while len(threads)<max_threads and crawl_queue:
+            # start more thread
+            thread = threading.Thread(target=process_queue())
+            thread.setDaemon(True)# set demon so main thread can stop when receives ctrl+c
+            thread.start()
+            threads.append(thread)
+        time.sleep(SLEEP_TIME)
+
 
 
 def get_links(html):
